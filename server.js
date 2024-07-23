@@ -1,111 +1,198 @@
 const express = require('express');
-const bodyParser = require('body-parser');
 const cors = require('cors');
-const bcrypt = require('bcrypt');
+const multer = require('multer');
+const path = require('path');
 const jwt = require('jsonwebtoken');
+const bcrypt = require('bcrypt');
+const { body, validationResult } = require('express-validator');
+const rateLimit = require('express-rate-limit');
+const https = require('https');
+const fs = require('fs');
 
 const app = express();
 const port = 3000;
 
 app.use(cors());
-app.use(bodyParser.json());
+app.use(express.json());
 
-const users = {}; // { username: { password: hashedPassword, role: 'user' or 'admin', isApproved: true/false, location: {latitude, longitude} } }
-const adminPassword = 'adminpassword'; // Change this to a more secure password
+const JWT_SECRET = 's#@@#jenewe#@!#!@FRERFE13213eweie3####@@#$%#@$%&ew@@#$@#';
 
-// Middleware to check admin status
-const isAdmin = (req, res, next) => {
-    const { username, password } = req.body;
-    if (username === 'admin' && password === adminPassword) {
-        next();
-    } else {
-        res.status(403).json({ message: 'Admin access required' });
-    }
-};
+// In-memory storage (replace with a database in production)
+const users = [
+    { id: 1, username: 'ADMIN', password: bcrypt.hashSync('adminpass', 10), isAdmin: true },
+    { id: 2, username: 'user1', password: bcrypt.hashSync('pass1', 10), isAdmin: false },
+    { id: 3, username: 'user2', password: bcrypt.hashSync('pass2', 10), isAdmin: false },
+];
 
-// Register new user
-app.post('/register', (req, res) => {
-    const { username, password } = req.body;
+let visits = [];
+let userLocations = {};
 
-    if (users[username]) {
-        return res.json({ message: 'Username already exists' });
-    }
-
-    const hashedPassword = bcrypt.hashSync(password, 10);
-    users[username] = { password: hashedPassword, role: 'user', isApproved: false, location: null };
-    res.json({ message: 'Registration successful. Awaiting admin approval.' });
-});
-
-// Login user
-app.post('/login', (req, res) => {
-    const { username, password } = req.body;
-    const user = users[username];
-
-    if (user && bcrypt.compareSync(password, user.password)) {
-        if (user.isApproved) {
-            res.json({ message: 'Login successful', role: user.role });
-        } else {
-            res.json({ message: 'User not approved by admin' });
+const upload = multer({ 
+    dest: 'uploads/',
+    limits: { fileSize: 5 * 1024 * 1024 }, // 5MB limit
+    fileFilter: (req, file, cb) => {
+        const filetypes = /jpeg|jpg|png/;
+        const mimetype = filetypes.test(file.mimetype);
+        const extname = filetypes.test(path.extname(file.originalname).toLowerCase());
+        if (mimetype && extname) {
+            return cb(null, true);
         }
-    } else {
-        res.json({ message: 'Invalid credentials' });
+        cb(new Error("Error: File upload only supports images"));
     }
 });
 
-// Request password reset
-app.post('/resetPassword', (req, res) => {
-    const { username } = req.body;
-    if (users[username]) {
-        // Simulate sending a reset request (e.g., via email)
-        res.json({ message: 'Password reset request received. Awaiting admin approval.' });
+// Rate limiting
+const limiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 100 // limit each IP to 100 requests per windowMs
+});
+
+app.use(limiter);
+
+function authenticateToken(req, res, next) {
+    const authHeader = req.headers['authorization'];
+    const token = authHeader && authHeader.split(' ')[1];
+
+    if (token == null) return res.status(401).json({ message: 'Authentication required' });
+
+    jwt.verify(token, JWT_SECRET, (err, user) => {
+        if (err) return res.status(403).json({ message: 'Invalid or expired token' });
+        req.user = user;
+        next();
+    });
+}
+
+app.post('/login', 
+    body('username').isString().trim().notEmpty(),
+    body('password').isString().notEmpty(),
+    (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+        return res.status(400).json({ errors: errors.array() });
+    }
+
+    const { username, password } = req.body;
+    const user = users.find(u => u.username === username);
+    
+    if (user && bcrypt.compareSync(password, user.password)) {
+        const token = jwt.sign({ id: user.id, username: user.username, isAdmin: user.isAdmin }, JWT_SECRET, { expiresIn: '1h' });
+        res.json({ token, isAdmin: user.isAdmin });
     } else {
-        res.json({ message: 'Username not found' });
+        res.status(400).json({ message: 'Invalid username or password' });
     }
 });
 
-// Update location
-app.post('/updateLocation', (req, res) => {
-    const { username, latitude, longitude } = req.body;
-    const user = users[username];
+app.post('/logout', authenticateToken, (req, res) => {
+    // In a real-world scenario, you might want to invalidate the token here
+    // For now, we'll just send a success message
+    res.status(200).json({ message: 'Logged out successfully' });
+});
 
-    if (user && user.isApproved) {
-        user.location = { latitude, longitude };
-        res.json({ message: 'Location updated' });
-    } else {
-        res.status(403).json({ message: 'User not approved or not found' });
+app.post('/check-in', 
+    authenticateToken,
+    body('lat').isFloat({ min: -90, max: 90 }),
+    body('lng').isFloat({ min: -180, max: 180 }),
+    body('timestamp').isISO8601(),
+    (req, res) => {
+        const errors = validationResult(req);
+        if (!errors.isEmpty()) {
+            return res.status(400).json({ errors: errors.array() });
+        }
+
+        const { lat, lng, timestamp } = req.body;
+        visits.push({ userId: req.user.id, checkIn: new Date(timestamp), lat, lng });
+        res.status(200).json({ message: 'Checked in successfully' });
     }
-});
+);
 
-// Track user location
-app.post('/trackUser', (req, res) => {
-    const { username, passcode } = req.body;
-    const user = users[username];
+app.post('/check-out', 
+    authenticateToken,
+    body('lat').isFloat({ min: -90, max: 90 }),
+    body('lng').isFloat({ min: -180, max: 180 }),
+    body('timestamp').isISO8601(),
+    body('duration').isFloat({ min: 0 }),
+    (req, res) => {
+        const errors = validationResult(req);
+        if (!errors.isEmpty()) {
+            return res.status(400).json({ errors: errors.array() });
+        }
 
-    if (user && passcode === user.password) {
-        res.json({ location: user.location || { latitude: null, longitude: null } });
-    } else {
-        res.status(403).json({ message: 'Invalid username or passcode' });
+        const { lat, lng, timestamp, duration } = req.body;
+        const lastVisit = visits.filter(v => v.userId === req.user.id).pop();
+        if (lastVisit && !lastVisit.checkOut) {
+            lastVisit.checkOut = new Date(timestamp);
+            lastVisit.duration = duration;
+            lastVisit.endLat = lat;
+            lastVisit.endLng = lng;
+            res.status(200).json({ message: 'Checked out successfully' });
+        } else {
+            res.status(400).json({ message: 'No active check-in found' });
+        }
     }
-});
+);
 
-// Admin: Approve user
-app.post('/admin/approveUser', isAdmin, (req, res) => {
-    const { username } = req.body;
-    const user = users[username];
+app.post('/upload-image', 
+    authenticateToken, 
+    upload.single('image'),
+    body('lat').isFloat({ min: -90, max: 90 }),
+    body('lng').isFloat({ min: -180, max: 180 }),
+    (req, res) => {
+        const errors = validationResult(req);
+        if (!errors.isEmpty()) {
+            return res.status(400).json({ errors: errors.array() });
+        }
 
-    if (user) {
-        user.isApproved = true;
-        res.json({ message: 'User approved' });
-    } else {
-        res.status(404).json({ message: 'User not found' });
+        if (!req.file) {
+            return res.status(400).json({ message: 'No image uploaded' });
+        }
+        const { lat, lng } = req.body;
+        // Here you would typically save the image metadata to a database
+        res.status(200).json({ message: 'Image uploaded successfully', filename: req.file.filename });
     }
+);
+
+app.get('/visit-log', authenticateToken, (req, res) => {
+    const userVisits = visits.filter(v => v.userId === req.user.id);
+    res.status(200).json(userVisits);
 });
 
-// Admin: View all user locations
-app.post('/admin/getAllLocations', isAdmin, (req, res) => {
-    res.json(users);
+app.post('/update-location', 
+    authenticateToken,
+    body('lat').isFloat({ min: -90, max: 90 }),
+    body('lng').isFloat({ min: -180, max: 180 }),
+    (req, res) => {
+        const errors = validationResult(req);
+        if (!errors.isEmpty()) {
+            return res.status(400).json({ errors: errors.array() });
+        }
+
+        const { lat, lng } = req.body;
+        userLocations[req.user.id] = { lat, lng, lastUpdated: new Date() };
+        res.status(200).json({ message: 'Location updated successfully' });
+    }
+);
+
+app.get('/users', authenticateToken, (req, res) => {
+    if (!req.user.isAdmin) {
+        return res.status(403).json({ message: 'Access denied' });
+    }
+    
+    const userList = users.map(user => ({
+        id: user.id,
+        username: user.username,
+        isAdmin: user.isAdmin,
+        lastLocation: userLocations[user.id] || null
+    }));
+    
+    res.status(200).json(userList);
 });
 
-app.listen(port, () => {
-    console.log(`Server running at http://localhost:${port}`);
+// Error handling middleware
+app.use((err, req, res, next) => {
+    console.error(err.stack);
+    res.status(500).json({ message: 'Something went wrong!', error: err.message });
+});
+
+https.createServer(app).listen(port, () => {
+    console.log(HTTPS Server running at https://localhost:${port});
 });
