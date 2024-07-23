@@ -199,12 +199,6 @@ app.use((err, req, res, next) => {
     res.status(500).json({ message: 'Something went wrong!', error: err.message });
 });
 
-// Use HTTPS
-const httpsOptions = {
-    key: fs.readFileSync('path/to/your/key.pem'),
-    cert: fs.readFileSync('path/to/your/cert.pem')
-};
-
-https.createServer(httpsOptions, app).listen(port, () => {
+https.createServer(app).listen(port, () => {
     console.log(`HTTPS Server running at https://localhost:${port}`);
 });
