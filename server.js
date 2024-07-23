@@ -14,7 +14,7 @@ const port = 3000;
 
 // Updated CORS configuration
 app.use(cors({
-  origin: 'https://funsparktv-ai.github.io',
+  origin: 'https://funsparktv-ai.github.io/MapMasterPro',
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
