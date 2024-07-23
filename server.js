@@ -12,7 +12,13 @@ const fs = require('fs');
 const app = express();
 const port = 3000;
 
-app.use(cors());
+// Updated CORS configuration
+app.use(cors({
+  origin: 'https://funsparktv-ai.github.io',
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
+
 app.use(express.json());
 
 const JWT_SECRET = 's#@@#jenewe#@!#!@FRERFE13213eweie3####@@#$%#@$%&ew@@#$@#';
@@ -193,6 +199,12 @@ app.use((err, req, res, next) => {
     res.status(500).json({ message: 'Something went wrong!', error: err.message });
 });
 
-https.createServer(app).listen(port, () => {
+// Use HTTPS
+const httpsOptions = {
+    key: fs.readFileSync('path/to/your/key.pem'),
+    cert: fs.readFileSync('path/to/your/cert.pem')
+};
+
+https.createServer(httpsOptions, app).listen(port, () => {
     console.log(`HTTPS Server running at https://localhost:${port}`);
 });
