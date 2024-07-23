@@ -194,5 +194,5 @@ app.use((err, req, res, next) => {
 });
 
 https.createServer(app).listen(port, () => {
-    console.log(HTTPS Server running at https://trackerbackend-n7sh.onrender.com);
+    console.log(HTTPS Server running at https://localhost:${port});
 });
